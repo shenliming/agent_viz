@@ -14,6 +14,7 @@ import type {
   PluginHookAfterToolCallEvent,
   PluginHookToolContext,
 } from "../types.js";
+import { resolveSessionId } from "./session-context.js";
 
 // 工具分类
 function classifyTool(toolName: string): string {
@@ -62,7 +63,7 @@ export function registerToolCallHooks(api: OpenClawPluginApi, transport: VizTran
       transport.send({
         type: "before_tool_call",
         timestamp: Date.now(),
-        sessionId: e.runId ? undefined : undefined,
+        sessionId: resolveSessionId(undefined, undefined, e.runId),
         runId: e.runId,
         data: {
           toolName: e.toolName,
@@ -100,6 +101,7 @@ export function registerToolCallHooks(api: OpenClawPluginApi, transport: VizTran
       transport.send({
         type: "after_tool_call",
         timestamp: Date.now(),
+        sessionId: resolveSessionId(undefined, undefined, e.runId),
         runId: e.runId,
         data: {
           toolName: e.toolName,

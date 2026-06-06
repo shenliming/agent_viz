@@ -11,6 +11,7 @@ import type {
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
 } from "../types.js";
+import { sessionKeyToId } from "./session-context.js";
 
 export function registerSessionHooks(api: OpenClawPluginApi, transport: VizTransport): void {
   const { logger } = api;
@@ -21,6 +22,11 @@ export function registerSessionHooks(api: OpenClawPluginApi, transport: VizTrans
     (event) => {
       const e = event as PluginHookSessionStartEvent;
       logger.info(`[agent-viz] session_start: ${e.sessionId}`);
+
+      // 建立 sessionKey → sessionId 映射
+      if (e.sessionId && e.sessionKey) {
+        sessionKeyToId.set(e.sessionKey, e.sessionId);
+      }
 
       transport.send({
         type: "session_start",

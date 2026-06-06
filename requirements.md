@@ -1,539 +1,264 @@
 # Agent 可视化监控系统 - 需求文档
 
+> 最后更新：2026-06-06
+
 ## 项目概述
-开发一个类似插件的可视化工具，用于监控 Agent 系统（如 OpenClaw 等）的运行状态，实现对 Agent 行为的全面可视化，类似于对 Agent 进行"CT 扫描"。
+开发一个可视化监控工具，用于监控 Agent 系统的运行状态，实现 Agent 行为的全面可视化，类似对 Agent 进行"CT 扫描"。
 
 ## 核心目标
 - **学习与研究**：帮助开发者理解 Agent 内部的工作机制和决策过程
 - **行为可视化**：将 Agent 的运行过程以直观的方式呈现出来
 - **实时监控**：能够实时追踪 Agent 的状态变化
 - **过程回放**：支持历史记录的完整回放
-- **多系统兼容**：设计通用架构，支持多种 Agent 框架
+- **多系统兼容**：代理层通用拦截 + 框架插件适配器，支持多种 Agent 框架
 
 ---
 
-## 监控内容（已确认）
+## 双层数据采集架构
+
+设计核心理念：**代理层负责"LLM 收到/返回了什么"，插件层负责"Agent 内部在做什么"**。两者互补，不可替代。
+
+```
+┌──────────────────────────────────────────────────┐
+│               可视化前端 (Web)                    │
+│   时间线 | Context | 流程图 | 状态 | 回放        │
+│   React + Vite + ReactFlow + WebSocket           │
+└────────┬───────────────────┬─────────────────────┘
+         │                   │
+  WebSocket│            REST │API
+         │                   │
+┌────────▼───────────────────▼─────────────────────┐
+│           viz-backend (9001)                      │
+│   统一事件接收 | 存储(SQLite) | 广播 | API        │
+│   Express + WebSocket + better-sqlite3            │
+└────────┬───────────────────┬─────────────────────┘
+         │                   │
+    ┌────▼─────┐        ┌────▼──────────┐
+    │viz-proxy │        │ 框架插件适配器  │
+    │ (9002)   │        │                │
+    │          │        │ OpenClaw Plugin │
+    │ LLM API  │        │ (hooks/状态)    │
+    │ 完整拦截  │        │                │
+    │          │        │ 未来: LangChain │
+    │ 通用      │        │ Adapter         │
+    └──────────┘        └────────────────┘
+```
+
+### 代理层 (viz-proxy)
+
+```
+OpenClaw → viz-proxy (9002) → LLM API
+                 │
+          拦截完整 HTTP 请求/响应
+                 │
+          SQLite 存储 + WebSocket 推送前端
+```
+
+**捕获内容**：完整 request body（messages + tools JSON + 参数）、完整 response body（assistant 回复 + usage）
+
+**优势**：跨框架通用，不依赖 Agent 框架内部 API。
+
+**局限**：无法感知 Agent 内部状态（thinking/executing/compacting）、工具调用链、文件 I/O 路径等。
+
+### 插件层 (openclaw-viz-plugin)
+
+**捕获内容**：工具调用链（顺序/耗时/依赖）、Agent 状态变化、上下文压缩事件、会话生命周期、文件 I/O 路径。
+
+**设计原则**：每个 Agent 框架写一个 Adapter Plugin，输出统一格式事件到同一个 viz-backend。
+
+---
+
+## 监控内容
 
 ### 1. Context Window 监控
-- 每次 LLM 调用时的完整 prompt
-- System prompt / User message / Assistant message
-- Context window 使用量（tokens / 最大容量）
-- 上下文截断事件（compaction/summarization）
+- [x] 每次 LLM 调用时的完整 prompt（system + history + current）
+- [x] System prompt / User message / Assistant message 逐条展示
+- [x] Context window 使用量（tokens / 最大容量），进度条可视化
+- [x] 上下文截断事件（compaction）
+- [x] **代理数据源**：LLM 实际收到的完整 messages + tools JSON（含完整 tool schema）
 
 ### 2. I/O 读写记录
-- 文件系统读写操作（路径、内容摘要、操作类型）
-- 网络请求（URL、方法、响应状态）
-- 数据库/持久化存储操作
+- [x] 文件系统读写操作（路径、内容摘要、操作类型）— 插件 classifyTool
+- [ ] 网络请求详情（URL、方法、响应状态码）
+- [ ] 数据库/持久化存储操作
 
 ### 3. 工具调用（Tool Calls）
-- 工具名称、参数、返回值
-- 工具调用耗时
-- 工具调用链（顺序和依赖关系）
+- [x] 工具名称、参数、返回值
+- [x] 工具调用耗时
+- [x] 工具调用链（顺序和依赖关系）— ReactFlow 流程图
+- [x] 工具分类（file_read/write/edit, exec, network, search, memory）
 
 ### 4. 状态变化
-- Agent 当前状态（idle / thinking / executing / waiting）
-- 会话状态变化
-- 错误/异常事件
+- [x] Agent 当前状态（idle / thinking / executing / compacting / terminated）— 插件推断
+- [x] 会话状态变化
+- [ ] 独立错误/异常事件（高亮展示）
 
 ### 5. 决策过程/思考链
-- LLM 的 reasoning 过程（如 thinking tags）
-- 多步推理的中间结果
-- 自我修正/反思记录
+- [x] LLM 的 reasoning 过程（thinking tags）— Context Window 中高亮
+- [ ] 多步推理的中间结果提取
+- [ ] 自我修正/反思记录
 
 ### 6. Token 使用统计
-- 每次调用的 input/output tokens
-- 累计 token 消耗
-- 成本估算
+- [x] 每次调用的 input/output tokens
+- [x] 累计 token 消耗（session 级）
+- [x] 成本估算
+- [ ] Token 使用趋势图表
 
 ---
 
 ## 技术架构
 
-### 整体架构
+### 数据流
+
 ```
-┌─────────────────────────────────────────┐
-│           可视化前端 (Web)               │
-│    时间线 | 流程图 | 状态监控 | 回放      │
-│    React + React Flow + WebSocket        │
-└────────────────┬────────────────────────┘
-                 │ WebSocket / REST API
-┌────────────────▼────────────────────────┐
-│          数据采集服务 (Backend)          │
-│    事件接收 | 存储 | 会话管理            │
-│    Node.js + SQLite/PostgreSQL           │
-└────────────────┬────────────────────────┘
-                 │
-    ┌────────────┼────────────┐
-    ▼            ▼            ▼
-┌───────┐  ┌───────┐  ┌───────┐
-│OpenClaw│  │ Lang  │  │ 其他  │
-│Adapter │  │Chain  │  │Adapter│
-│(埋点)  │  │Adapter│  │       │
-└───────┘  └───────┘  └───────┘
+OpenClaw Gateway
+    │
+    ├── LLM API Request ──→ viz-proxy (9002) ──→ LLM API
+    │                            │
+    │                      拦截完整 request/response
+    │                      存储到 SQLite
+    │                      WS 广播 llm_proxy_request ──→ viz-backend (9001)
+    │                                                       │
+    ├── Plugin Hooks ──────────→ openclaw-viz-plugin ───────┤
+    │    model_call_started       采集 Agent 内部状态         │
+    │    before_tool_call         sessionId 关联              │
+    │    llm_input/output        状态推断                    │
+    │    compaction              工具分类                    │
+    │    session_start/end       WS 发送统一事件 ────────────→
+    │                              
+    └── Tool Execution ──→ (bash tools, file tools, etc.)
+                              ← 插件通过 hooks 感知，代理看不到
 ```
+
+### 事件类型一览
+
+| 类别 | 事件类型 | 数据来源 | 说明 |
+|------|---------|:---:|------|
+| **LLM 请求** | `llm_proxy_request` | 代理 | 完整 request body（messages+tools+参数） |
+| **LLM 输入** | `llm_input` | 插件 | system prompt、history messages |
+| **LLM 输出** | `llm_output` | 插件 | assistant 回复、thinking、usage |
+| **模型调用** | `model_call_started/ended` | 插件 | provider、model、耗时、错误 |
+| **工具调用** | `before_tool_call/after_tool_call` | 插件 | 工具名、参数、结果、耗时、分类 |
+| **状态变化** | `agent_state_change` | 插件 | idle/thinking/executing/compacting/terminated |
+| **上下文压缩** | `before_compaction/after_compaction` | 插件 | 压缩前后对比 |
+| **会话** | `session_start/end` | 插件 | 会话生命周期 |
+| **消息** | `message_received/sent` | 插件 | 用户输入 & Agent 输出 |
+
+### 跨框架适配器设计
+
+当前仅实现 OpenClaw Adapter（基于其 Hooks 系统）。未来扩展：
+
+```
+framework-adapters/
+├── openclaw/          ← 已实现（plugin hooks）
+├── langchain/         ← 计划
+├── autogen/           ← 计划
+└── template/          ← 适配器模板
+```
+
+每个适配器只需实现：1) 采集框架特有事件 2) 转换为统一事件格式 3) 发送到 viz-backend。
 
 ---
 
-## OpenClaw 侵入式埋点方案
+## OpenClaw 插件实现详情
 
-### OpenClaw 实际架构分析
+### Hook 注册清单
 
-基于源码分析，OpenClaw 的核心组件和调用链路：
+| Hook 事件 | 采集内容 | 优先级 | 文件 |
+|-----------|---------|:---:|------|
+| `model_call_started` | provider/model/token budget | 100 | model-call.ts |
+| `model_call_ended` | 耗时/错误/outcome | 100 | model-call.ts |
+| `llm_input` | system prompt/history/thinking | 100 | llm-content.ts |
+| `llm_output` | assistant 回复/usage/thinking | 100 | llm-content.ts |
+| `before_tool_call` | 工具名/参数/分类/路径 | 100 | tool-call.ts |
+| `after_tool_call` | 结果/耗时/状态 | 100 | tool-call.ts |
+| `before_compaction` | 压缩前消息数/token 数 | 100 | compaction.ts |
+| `after_compaction` | 压缩后对比 | 100 | compaction.ts |
+| `session_start` | sessionId/sessionKey | 100 | session.ts |
+| `session_end` | 消息数/耗时/原因 | 100 | session.ts |
+| `message_received` | 用户消息内容/channel | 100 | message.ts |
+| `message_sent` | Agent 输出内容/channel | 100 | message.ts |
+| *(多 hook 推断)* | Agent 状态变化 | 90 | state-monitor.ts |
 
-```
-消息入口 (Channels)
-    │
-    ▼
-dispatchInboundMessage (src/auto-reply/dispatch.ts)
-    │
-    ▼
-getReplyFromConfig (src/auto-reply/reply/get-reply.ts)
-    │
-    ├── initSessionState        ← 会话状态初始化
-    ├── resolveModel            ← 模型选择
-    ├── runPreparedReply        ← LLM 调用
-    │       │
-    │       ├── streamSimple (src/llm/stream.ts)     ← LLM 流式调用
-    │       │       │
-    │       │       └── onPayload / onResponse       ← 请求/响应钩子
-    │       │
-    │       └── Agent.run() (src/agents/harness/)    ← Agent 循环
-    │               │
-    │               ├── tool execute                 ← 工具执行
-    │               ├── compaction                   ← 上下文压缩
-    │               └── usage tracking               ← Token 统计
-    │
-    └── dispatch reply            ← 回复发送
-```
+### Session 上下文关联（session-context.ts）
 
-### 关键源码文件映射
+解决不同 hook 事件中会话标识不一致的问题：
+- `sessionKey → sessionId` 映射（message_received 只有 sessionKey）
+- `runId → sessionId` 映射（tool_call 只有 runId）
+- `resolveSessionId()` 统一解析函数
 
-| 功能 | 文件路径 | 说明 |
-|------|----------|------|
-| 消息分发入口 | `src/auto-reply/dispatch.ts` | `dispatchInboundMessage` - 消息处理入口 |
-| 回复生成 | `src/auto-reply/reply/get-reply.ts` | `getReplyFromConfig` - 核心回复逻辑 |
-| LLM 流式调用 | `src/llm/stream.ts` | `streamSimple` - 所有 LLM 调用的统一入口 |
-| Agent 工具集 | `src/agents/agent-tools.ts` | `createOpenClawCodingTools` - 工具创建 |
-| 上下文窗口 | `src/agents/context.ts` | `resolveContextTokensForModel` - context window 管理 |
-| Token 统计 | `src/agents/usage.ts` | `normalizeUsage` - 统一的 usage 归一化 |
-| 会话管理 | `src/agents/sessions/sdk.ts` | `createAgentSession` - 会话生命周期 |
-| 上下文压缩 | `src/agents/compaction.ts` | `summarizeWithFallback` - compaction 逻辑 |
-| 侧边问题 | `src/agents/btw.ts` | `runBtwSideQuestion` - /btw 命令 |
-| Gateway | `src/gateway/server.ts` | WebSocket 服务 |
-| 事件系统 | `src/gateway/events.ts` | 内部事件总线 |
-| 诊断时间线 | `src/infra/diagnostics-timeline.ts` | 已有的诊断基础设施 |
-
-### 埋点设计原则
-
-1. **最小侵入**：利用已有的 `measureDiagnosticsTimelineSpan` 基础设施，在其基础上扩展
-2. **事件驱动**：所有埋点输出统一格式的事件
-3. **异步非阻塞**：埋点不影响 Agent 正常运行
-4. **可配置**：通过配置文件开关各监控项
-
-### 埋点位置与事件定义
-
-#### 1. 消息入口层 - `src/auto-reply/dispatch.ts`
-
-**埋点位置**：`dispatchInboundMessage` 函数
-
-```typescript
-// 已有基础设施可复用：
-// - measureDiagnosticsTimelineSpanSync("auto_reply.finalize_context", ...)
-// - logMessageReceived(...)
-
-interface VizEvents {
-  // 消息接收
-  'message:received': {
-    sessionId: string;
-    sessionKey: string;
-    channel: string;        // telegram/discord/whatsapp/slack
-    messageId: string;
-    chatType: string;       // direct/group/channel
-    timestamp: number;
-  };
-  
-  // 会话状态初始化
-  'session:init': {
-    sessionKey: string;
-    sessionId: string;
-    agentId: string;
-    isNewSession: boolean;
-    workspaceDir: string;
-    timestamp: number;
-  };
-}
-```
-
-#### 2. LLM 调用层 - `src/llm/stream.ts`
-
-**埋点位置**：`streamSimple` 函数，包装请求和响应
-
-```typescript
-interface LlmEvents {
-  // LLM 调用前
-  'llm:request': {
-    sessionId: string;
-    provider: string;       // anthropic/openai/google
-    model: string;
-    messages: Array<{
-      role: string;
-      content: string | Array<{type: string; text?: string; thinking?: string}>;
-    }>;
-    systemPrompt: string;
-    tools: Array<{name: string; description: string}>;
-    contextTokens: number;  // 当前上下文 token 数
-    maxTokens: number;      // 模型最大 context window
-    timestamp: number;
-  };
-  
-  // LLM 响应完成
-  'llm:response': {
-    sessionId: string;
-    content: string;
-    reasoning: string;      // thinking/reasoning 内容
-    toolCalls: Array<{
-      name: string;
-      parameters: Record<string, any>;
-      id: string;
-    }>;
-    usage: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      reasoningTokens: number;
-      total: number;
-    };
-    finishReason: string;
-    latency: number;        // ms
-    timestamp: number;
-  };
-  
-  // 流式事件
-  'llm:stream:event': {
-    sessionId: string;
-    eventType: string;      // text_delta/thinking_delta/text_start/text_end/thinking_start/thinking_end/done/error
-    data: any;
-    timestamp: number;
-  };
-}
-```
-
-#### 3. 工具调用层 - `src/agents/agent-tools.ts`
-
-**埋点位置**：工具执行包装器（`wrapToolWithBeforeToolCallHook` 已有钩子机制）
-
-```typescript
-interface ToolEvents {
-  // 工具调用开始
-  'tool:call': {
-    sessionId: string;
-    toolName: string;
-    parameters: Record<string, any>;
-    callId: string;
-    timestamp: number;
-  };
-  
-  // 工具执行结果
-  'tool:result': {
-    sessionId: string;
-    toolName: string;
-    callId: string;
-    result: string;         // 截断后的结果
-    success: boolean;
-    latency: number;
-    timestamp: number;
-  };
-}
-```
-
-#### 4. 执行层 - `src/agents/bash-tools.ts`
-
-**埋点位置**：exec/process 工具的执行函数
-
-```typescript
-interface ExecEvents {
-  // Shell 命令执行
-  'exec:command': {
-    sessionId: string;
-    command: string;
-    cwd: string;
-    mode: string;           // allow/ask/deny
-    success: boolean;
-    output: string;         // 截断后的输出
-    exitCode: number;
-    latency: number;
-    timestamp: number;
-  };
-}
-```
-
-#### 5. 文件 I/O 层 - `src/agents/tools/` (read/write/edit)
-
-**埋点位置**：文件读写工具的执行函数
-
-```typescript
-interface FileEvents {
-  // 文件读取
-  'file:read': {
-    sessionId: string;
-    path: string;
-    size: number;
-    success: boolean;
-    timestamp: number;
-  };
-  
-  // 文件写入
-  'file:write': {
-    sessionId: string;
-    path: string;
-    size: number;
-    contentPreview: string;  // 前 200 字符
-    success: boolean;
-    timestamp: number;
-  };
-  
-  // 文件编辑（patch）
-  'file:edit': {
-    sessionId: string;
-    path: string;
-    operation: string;       // create/replace/append/patch
-    success: boolean;
-    timestamp: number;
-  };
-}
-```
-
-#### 6. 上下文压缩层 - `src/agents/compaction.ts`
-
-**埋点位置**：`summarizeWithFallback` 函数
-
-```typescript
-interface CompactionEvents {
-  // 上下文压缩开始
-  'compaction:start': {
-    sessionId: string;
-    messageCount: number;
-    currentTokens: number;
-    contextWindow: number;
-    trigger: string;         // context_full / manual / stage
-    timestamp: number;
-  };
-  
-  // 上下文压缩完成
-  'compaction:done': {
-    sessionId: string;
-    summaryLength: number;
-    originalTokens: number;
-    compressedTokens: number;
-    compressionRatio: number;
-    latency: number;
-    success: boolean;
-    timestamp: number;
-  };
-}
-```
-
-#### 7. 状态变化层
-
-**埋点位置**：Agent 状态转换点
-
-```typescript
-interface StateEvents {
-  // Agent 状态变化
-  'agent:state': {
-    sessionId: string;
-    from: string;            // idle/thinking/executing/waiting/compacting
-    to: string;
-    reason: string;
-    timestamp: number;
-  };
-  
-  // 模型切换
-  'agent:model:change': {
-    sessionId: string;
-    from: string;            // provider/model
-    to: string;
-    reason: string;          // user_override/auto_fallback/heartbeat
-    timestamp: number;
-  };
-}
-```
-
-### 埋点实现方案
-
-#### 方案：利用已有诊断基础设施扩展
-
-OpenClaw 已有 `measureDiagnosticsTimelineSpan` 和 `isDiagnosticsEnabled` 基础设施（`src/infra/diagnostics-timeline.ts`），最佳方案是在此基础上扩展，而非完全重写。
-
-**实现路径**：
+### 工具分类（classifyTool）
 
 ```
-src/
-├── viz/                          ← 新增监控模块
-│   ├── index.ts                  ← 入口
-│   ├── emitter.ts                ← 统一事件发射器
-│   ├── transport.ts              ← WebSocket 传输层
-│   ├── config.ts                 ← 配置加载
-│   ├── events.ts                 ← 事件类型定义
-│   └── patches/                  ← 各层埋点补丁
-│       ├── stream.patch.ts       ← LLM 调用埋点
-│       ├── dispatch.patch.ts     ← 消息分发埋点
-│       ├── tools.patch.ts        ← 工具调用埋点
-│       ├── exec.patch.ts         ← 执行层埋点
-│       └── compaction.patch.ts   ← 压缩层埋点
+file_read   ← read, file_read
+file_write  ← write, file_write  
+file_edit   ← edit, patch
+exec        ← exec, shell, bash
+network     ← fetch, http, request
+search      ← search
+memory      ← memory, recall
+other       ← 默认
 ```
 
-#### 核心实现代码
-
-```typescript
-// src/viz/emitter.ts
-import { EventEmitter } from 'events';
-import { Transport } from './transport';
-import type { VizConfig } from './config';
-import type { VizEvent } from './events';
-
-class VizEmitter {
-  private emitter = new EventEmitter();
-  private transport: Transport;
-  private enabled: boolean;
-  private sessionId: string | null = null;
-  
-  constructor(config: VizConfig) {
-    this.enabled = config.enabled;
-    this.transport = new Transport(config.endpoint);
-  }
-  
-  setSessionId(id: string) {
-    this.sessionId = id;
-  }
-  
-  emit<T extends VizEvent['type']>(
-    event: T, 
-    data: Extract<VizEvent, { type: T }>['data']
-  ) {
-    if (!this.enabled) return;
-    
-    const envelope: VizEvent = {
-      type: event,
-      sessionId: this.sessionId,
-      data,
-      timestamp: Date.now()
-    };
-    
-    // 本地记录
-    this.emitter.emit(event, data);
-    
-    // 异步发送到后端
-    this.transport.send(envelope).catch(console.error);
-  }
-}
-
-export const vizEmitter = new VizEmitter(loadConfig());
-```
-
-```typescript
-// src/viz/patches/stream.patch.ts - LLM 调用埋点示例
-import { vizEmitter } from '../emitter';
-
-// 包装 streamSimple 函数
-const originalStreamSimple = streamSimple;
-
-export async function streamSimpleWithViz(
-  model: Model,
-  context: Context,
-  options: Options
-) {
-  const startTime = Date.now();
-  
-  // 发射请求事件
-  vizEmitter.emit('llm:request', {
-    provider: model.provider,
-    model: model.id,
-    messages: context.messages,
-    systemPrompt: context.systemPrompt,
-    tools: context.tools?.map(t => ({
-      name: t.name,
-      description: t.description
-    })) ?? [],
-    contextTokens: estimateTokens(context.messages),
-    maxTokens: model.contextWindow ?? 128000,
-  });
-  
-  const stream = await originalStreamSimple(model, context, options);
-  
-  // 包装流式事件
-  return {
-    async *[Symbol.asyncIterator]() {
-      let content = '';
-      let reasoning = '';
-      let usage: any = null;
-      
-      for await (const event of stream) {
-        // 发射流式事件
-        vizEmitter.emit('llm:stream:event', {
-          eventType: event.type,
-          data: event
-        });
-        
-        if (event.type === 'text_delta') content += event.delta;
-        if (event.type === 'thinking_delta') reasoning += event.delta;
-        if (event.type === 'done') usage = event.usage;
-        
-        yield event;
-      }
-      
-      // 发射响应完成事件
-      vizEmitter.emit('llm:response', {
-        content,
-        reasoning,
-        usage: normalizeUsage(usage),
-        latency: Date.now() - startTime,
-      });
-    }
-  };
-}
-```
-
-### 配置方式
+### 配置
 
 ```json
-// viz.config.json
 {
-  "enabled": true,
-  "endpoint": "ws://localhost:9000/viz",
-  "monitors": {
-    "messageReceived": true,
-    "llmCalls": true,
-    "llmStreamEvents": false,
-    "toolCalls": true,
-    "execCommands": true,
-    "fileIO": true,
-    "compaction": true,
-    "stateChanges": true,
-    "tokenUsage": true
-  },
-  "sampling": {
-    "messageContent": "truncated",  // full | truncated | hash
-    "maxContentLength": 2000,
-    "maxToolResultLength": 1000,
-    "bufferSize": 1000
-  },
-  "privacy": {
-    "maskSensitiveData": true,
-    "excludeChannels": ["sms"]
+  "plugins": {
+    "load": { "paths": ["/path/to/openclaw-viz-plugin"] },
+    "entries": {
+      "agent-viz": {
+        "enabled": true,
+        "hooks": { "allowConversationAccess": true },
+        "config": {
+          "endpoint": "ws://localhost:9001/ws",
+          "contentCapture": true,
+          "monitors": {
+            "messageReceived": true,
+            "messageSent": true,
+            "llmCalls": true,
+            "llmContent": true,
+            "toolCalls": true,
+            "compaction": true,
+            "stateChanges": true,
+            "sessionLifecycle": true
+          }
+        }
+      }
+    }
   }
 }
 ```
 
 ---
 
-## 待解决问题
+## 前端可视化
 
-1. 埋点模块的打包和分发方式（npm package / git submodule / patch）
-2. 后端服务的技术选型
-3. 前端可视化组件的具体设计
-4. 会话 ID 的关联方式（OpenClaw 使用 sessionKey 而非 sessionId）
+### 当前已实现
 
-## 备注
-本文档为初步需求记录，具体内容待进一步探讨后补充完善。
+| 视图 | 功能 | 数据源 |
+|------|------|:---:|
+| 时间线 | 按时间排列所有事件 | 插件事件 |
+| Context Window | LLM 调用上下文（token 进度/消息列表/thinking） | 插件 llm_input/output |
+| 真实 Context | LLM 实际 request body（完整 messages+tools JSON） | 代理 llm_proxy_request |
+| 工具调用图 | ReactFlow 流程图（6 色分类） | 插件 tool_call 事件 |
+| 状态面板 | 会话列表 + 最近事件 | 插件 session/state 事件 |
+
+### 待实现
+
+- [ ] 事件过滤和搜索（按类型/时间/会话）
+- [ ] Token 使用统计图表
+- [ ] 历史回放功能（逐步重放事件）
+- [ ] 独立错误事件高亮展示
+- [ ] 深色/浅色主题切换
+
+---
+
+## 待规划
+
+1. 网络请求详情（URL/方法/状态码）— 从 web_fetch 等工具参数中提取
+2. 自我修正/反思记录 — 分析连续 assistant 消息流
+3. 内容采样策略（full/truncated/hash）和隐私脱敏
+4. LangChain/其他框架适配器
+5. 性能优化（批量发送、大内容压缩）
+6. Hook vs Proxy 数据对比视图（研究 prompt 组装差异）

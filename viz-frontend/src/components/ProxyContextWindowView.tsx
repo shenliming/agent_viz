@@ -8,7 +8,7 @@
  * - 响应数据（assistant 回复 + usage）
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 
 interface ProxyRequest {
   id: number;
@@ -53,12 +53,9 @@ export function ProxyContextWindowView({ proxyUrl = 'http://localhost:9002' }: P
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  useEffect(() => {
-    loadRequests();
-  }, [proxyUrl]);
-
-  const loadRequests = async () => {
+  const loadRequests = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -72,7 +69,62 @@ export function ProxyContextWindowView({ proxyUrl = 'http://localhost:9002' }: P
     } finally {
       setLoading(false);
     }
-  };
+  }, [proxyUrl]);
+
+  // 初始加载 + WebSocket 实时更新
+  useEffect(() => {
+    loadRequests();
+
+    // 连接代理 WebSocket 获取实时数据
+    const wsUrl = proxyUrl.replace(/^http/, 'ws') + '/ws';
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('[ProxyContextWindow] WebSocket connected to proxy');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'llm_proxy_request' && data.data) {
+          // 将实时请求添加到列表顶部
+          const proxyReq: ProxyRequest = {
+            id: Date.now(), // 临时 ID，刷新后会更新
+            timestamp: data.timestamp,
+            model: data.data.model || 'unknown',
+            request_body: {
+              messages: data.data.messages || [],
+              tools: data.data.tools || [],
+            },
+            response_body: null,
+            status_code: data.data.status || 200,
+            duration_ms: data.data.duration || 0,
+            messages_count: data.data.messages?.length || 0,
+            tools_count: data.data.tools?.length || 0,
+            input_tokens: data.data.usage?.input || 0,
+            output_tokens: data.data.usage?.output || 0,
+            total_tokens: data.data.usage?.total || 0,
+          };
+          setRequests((prev) => [proxyReq, ...prev]);
+        }
+      } catch (err) {
+        console.error('[ProxyContextWindow] WS parse error:', err);
+      }
+    };
+
+    ws.onerror = () => {
+      console.warn('[ProxyContextWindow] WebSocket error');
+    };
+
+    ws.onclose = () => {
+      console.log('[ProxyContextWindow] WebSocket disconnected');
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [proxyUrl, loadRequests]);
 
   const selected = useMemo(
     () => requests.find((r) => r.id === selectedId) || null,
@@ -184,11 +236,19 @@ function RequestDetail({ request }: { request: ProxyRequest }) {
         <h3 style={styles.sectionTitle}>Messages ({messages.length})</h3>
         <div style={styles.messages}>
           {messages.map((msg, i) => {
-            const content = typeof msg.content === 'string' 
-              ? msg.content 
-              : Array.isArray(msg.content)
-                ? msg.content.map(c => c.text || JSON.stringify(c)).join('\n')
-                : JSON.stringify(msg.content);
+            let content: string;
+            if (typeof msg.content === 'string') {
+              content = msg.content;
+            } else if (Array.isArray(msg.content)) {
+               content = msg.content
+                 .filter(c => c != null)
+                 .map(c => (c as any)?.text || JSON.stringify(c))
+                 .join('\n');
+            } else if (msg.content == null) {
+              content = '(empty)';
+            } else {
+              content = JSON.stringify(msg.content);
+            }
             
             const charCount = content.length;
             const isExpanded = expandedMsg === i;
@@ -230,6 +290,7 @@ function RequestDetail({ request }: { request: ProxyRequest }) {
           <h3 style={styles.sectionTitle}>Tools ({tools.length})</h3>
           <div style={styles.tools}>
             {tools.map((tool, i) => {
+              const toolName = tool?.function?.name || (tool as any)?.name || `Tool ${i}`;
               const toolJson = JSON.stringify(tool, null, 2);
               const charCount = toolJson.length;
               const isExpanded = expandedMsg === `tool-${i}`;
@@ -237,7 +298,7 @@ function RequestDetail({ request }: { request: ProxyRequest }) {
               return (
                 <div key={i} style={styles.tool}>
                   <div style={styles.toolHeader}>
-                    <span style={styles.toolName}>{tool.function.name}</span>
+                    <span style={styles.toolName}>{toolName}</span>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                       <span style={styles.charCount}>{charCount} 字符</span>
                       <button 

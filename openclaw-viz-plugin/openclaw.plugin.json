@@ -15,6 +15,20 @@
       "contentCapture": {
         "type": "boolean",
         "default": true
+      },
+      "monitors": {
+        "type": "object",
+        "properties": {
+          "messageReceived": { "type": "boolean", "default": true },
+          "messageSent": { "type": "boolean", "default": true },
+          "llmCalls": { "type": "boolean", "default": true },
+          "llmContent": { "type": "boolean", "default": true },
+          "toolCalls": { "type": "boolean", "default": true },
+          "compaction": { "type": "boolean", "default": true },
+          "stateChanges": { "type": "boolean", "default": true },
+          "sessionLifecycle": { "type": "boolean", "default": true }
+        },
+        "default": {}
       }
     }
   },

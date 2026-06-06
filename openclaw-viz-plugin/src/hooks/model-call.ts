@@ -12,6 +12,7 @@ import type {
   PluginHookModelCallEndedEvent,
   PluginHookAgentContext,
 } from "../types.js";
+import { sessionKeyToId, runIdToSessionId } from "./session-context.js";
 
 export function registerModelCallHooks(api: OpenClawPluginApi, transport: VizTransport): void {
   const { logger } = api;
@@ -22,6 +23,12 @@ export function registerModelCallHooks(api: OpenClawPluginApi, transport: VizTra
     (event) => {
       const e = event as PluginHookModelCallStartedEvent;
       logger.debug(`[agent-viz] model_call_started: ${e.provider}/${e.model}`);
+
+      // 建立 session 和 run 映射
+      if (e.sessionId) {
+        if (e.sessionKey) sessionKeyToId.set(e.sessionKey, e.sessionId);
+        if (e.runId) runIdToSessionId.set(e.runId, e.sessionId);
+      }
 
       transport.send({
         type: "model_call_started",

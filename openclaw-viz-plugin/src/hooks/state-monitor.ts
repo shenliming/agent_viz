@@ -12,6 +12,7 @@
 
 import type { OpenClawPluginApi } from "../types.js";
 import type { VizTransport } from "../transport/index.js";
+import { sessionKeyToId, runIdToSessionId, resolveSessionId } from "./session-context.js";
 
 type AgentState = "idle" | "thinking" | "executing" | "compacting" | "terminated";
 
@@ -27,14 +28,15 @@ function emitStateChange(
   to: AgentState,
   reason: string,
 ) {
-  if (!sessionId) return;
+  const resolvedId = resolveSessionId(sessionId, sessionKey, runId);
+  if (!resolvedId) return;
 
-  sessionStates.set(sessionId, to);
+  sessionStates.set(resolvedId, to);
 
   transport.send({
     type: "agent_state_change",
     timestamp: Date.now(),
-    sessionId,
+    sessionId: resolvedId,
     sessionKey,
     runId,
     data: {
@@ -53,24 +55,41 @@ function getCurrentState(sessionId: string | undefined): AgentState {
 export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: VizTransport): void {
   const { logger } = api;
 
-  // 消息接收 → idle → thinking
+  // 会话开始 - 建立 sessionKey → sessionId 映射
+  api.on(
+    "session_start",
+    (event) => {
+      const e = event as any;
+      if (e.sessionId && e.sessionKey) {
+        sessionKeyToId.set(e.sessionKey, e.sessionId);
+      }
+    },
+    { priority: 100 },
+  );
+
+  // 消息接收 → thinking（通过 sessionKey 查找 sessionId）
   api.on(
     "message_received",
     (event) => {
       const e = event as any;
-      const current = getCurrentState(e.sessionKey);
+      const resolvedId = resolveSessionId(undefined, e.sessionKey, undefined);
+      const current = getCurrentState(resolvedId);
       if (current !== "thinking") {
-        emitStateChange(transport, e.sessionKey, e.sessionKey, undefined, current, "thinking", "message_received");
+        emitStateChange(transport, undefined, e.sessionKey, undefined, current, "thinking", "message_received");
       }
     },
     { priority: 90 },
   );
 
-  // 模型调用开始 → thinking
+  // 模型调用开始 → thinking（建立 runId → sessionId 映射）
   api.on(
     "model_call_started",
     (event) => {
       const e = event as any;
+      if (e.sessionId) {
+        if (e.sessionKey) sessionKeyToId.set(e.sessionKey, e.sessionId);
+        if (e.runId) runIdToSessionId.set(e.runId, e.sessionId);
+      }
       const current = getCurrentState(e.sessionId);
       if (current !== "thinking") {
         emitStateChange(transport, e.sessionId, e.sessionKey, e.runId, current, "thinking", "model_call_started");
@@ -79,23 +98,12 @@ export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: Viz
     { priority: 90 },
   );
 
-  // 工具调用前 → executing
+  // 工具调用前 → executing（通过 runId 查找 sessionId）
   api.on(
     "before_tool_call",
     (event) => {
       const e = event as any;
-      // 工具调用通常属于某个 session，通过 runId 关联
-      // 这里我们发送一个通用的 executing 状态
-      transport.send({
-        type: "agent_state_change",
-        timestamp: Date.now(),
-        runId: e.runId,
-        data: {
-          from: "thinking",
-          to: "executing",
-          reason: `tool_call: ${e.toolName}`,
-        },
-      });
+      emitStateChange(transport, undefined, undefined, e.runId, "thinking", "executing", `tool_call: ${e.toolName}`);
     },
     { priority: 90 },
   );
@@ -105,16 +113,7 @@ export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: Viz
     "after_tool_call",
     (event) => {
       const e = event as any;
-      transport.send({
-        type: "agent_state_change",
-        timestamp: Date.now(),
-        runId: e.runId,
-        data: {
-          from: "executing",
-          to: "thinking",
-          reason: `tool_call_completed: ${e.toolName}`,
-        },
-      });
+      emitStateChange(transport, undefined, undefined, e.runId, "executing", "thinking", `tool_call_completed: ${e.toolName}`);
     },
     { priority: 90 },
   );
@@ -124,7 +123,11 @@ export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: Viz
     "model_call_ended",
     (event) => {
       const e = event as any;
-      const current = getCurrentState(e.sessionId);
+      if (e.runId && e.sessionId) {
+        runIdToSessionId.set(e.runId, e.sessionId);
+      }
+      const resolvedId = resolveSessionId(e.sessionId, e.sessionKey, e.runId);
+      const current = getCurrentState(resolvedId);
       if (e.outcome === "completed" && current !== "idle") {
         emitStateChange(transport, e.sessionId, e.sessionKey, e.runId, current, "idle", "model_call_completed");
       }
@@ -137,8 +140,8 @@ export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: Viz
     "before_compaction",
     (event) => {
       const e = event as any;
-      // compaction 事件可能没有 sessionId，使用 sessionFile 作为标识
-      const sessionId = e.sessionFile || "unknown";
+      const resolvedId = resolveSessionId(e.sessionId, e.sessionKey, undefined);
+      const sessionId = resolvedId || e.sessionFile || "unknown";
       const current = getCurrentState(sessionId);
       if (current !== "compacting") {
         emitStateChange(transport, sessionId, undefined, undefined, current, "compacting", "compaction_started");
@@ -152,7 +155,8 @@ export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: Viz
     "after_compaction",
     (event) => {
       const e = event as any;
-      const sessionId = e.sessionFile || "unknown";
+      const resolvedId = resolveSessionId(e.sessionId, e.sessionKey, undefined);
+      const sessionId = resolvedId || e.sessionFile || "unknown";
       const current = getCurrentState(sessionId);
       if (current === "compacting") {
         emitStateChange(transport, sessionId, undefined, undefined, current, "idle", "compaction_completed");
@@ -171,7 +175,10 @@ export function registerStateMonitorHooks(api: OpenClawPluginApi, transport: Viz
         emitStateChange(transport, e.sessionId, e.sessionKey, undefined, current, "terminated", `session_end: ${e.reason}`);
       }
       // 清理状态
-      sessionStates.delete(e.sessionId);
+      if (e.sessionId) {
+        sessionStates.delete(e.sessionId);
+        sessionKeyToId.delete(e.sessionKey);
+      }
     },
     { priority: 90 },
   );
