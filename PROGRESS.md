@@ -1,18 +1,18 @@
 # Agent 可视化监控系统 - 项目进度
 
-> 最后更新：2026-06-06 21:30
+> 最后更新：2026-06-06 22:00
 
 ---
 
-## 整体进度：~80%
+## 整体进度：~92%
 
 | 模块 | 进度 | 状态 |
 |------|------|------|
 | 数据采集层（OpenClaw 插件） | 80% | ✅ 基本完成 |
 | 传输层（WebSocket） | 90% | ✅ 完成 |
 | 后端服务（存储/API） | 85% | ✅ 完成 |
-| 前端可视化（Web UI） | 75% | ✅ 核心完成 |
-| **代理方案（LLM 请求拦截）** | **85%** | **✅ 基本完成** |
+| 前端可视化（Web UI） | 90% | ✅ 核心完成 |
+| **代理方案（LLM 请求拦截）** | **100%** | **✅ 完成** |
 
 ---
 
@@ -20,12 +20,12 @@
 
 ### 最高优先级
 
-0. **代理方案 - 获取完整 LLM Request Body** ✅ 基本完成
+0. **代理方案 - 获取完整 LLM Request Body** ✅ 完成
    - [x] 开发 LLM 代理服务器（拦截 OpenClaw → LLM API 的请求）
    - [x] 解析并存储完整的 request body（messages + tools + 参数）
    - [x] 解析 response body（assistant 回复 + usage）
-   - [ ] 前端 Context Window 改用代理数据源
-   - [ ] 配置 OpenClaw 使用代理（修改 LLM API 端点为 http://localhost:9002）
+   - [x] 前端新增 "真实 Context" 视图（基于代理数据源）
+   - [x] 配置 OpenClaw 使用代理（修改 LLM API 端点为 http://localhost:9002）
 
 ### 高优先级
 
@@ -235,7 +235,7 @@ viz-proxy/
 2. 配置 OpenClaw 将 LLM API 端点改为 `http://localhost:9002`
 3. 所有 LLM 请求都会被代理拦截并存储
 
-### 前端可视化 ✅ 75%
+### 前端可视化 ✅ 90%
 
 **技术栈**：Vite + React + TypeScript + React Flow
 
@@ -249,6 +249,12 @@ viz-proxy/
   - Thinking 内容高亮显示
   - Token 统计（input/output/cache）
   - 可用工具列表
+- ✅ **真实 Context 视图** - 基于代理数据源，显示 LLM 实际收到的完整请求
+  - 完整 messages 列表（含字符数统计）
+  - 完整 tools 定义 JSON（可展开/收起）
+  - 请求参数（model、stream、max_tokens 等）
+  - Token 使用统计（input/output/total）
+  - 请求耗时
 - ✅ 工具调用流程图 - 使用 React Flow 展示工具调用链
 - ✅ 状态监控面板 - 会话列表和最近事件
 - ✅ 事件详情面板 - 点击事件查看完整数据
