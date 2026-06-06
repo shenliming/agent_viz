@@ -1,0 +1,27 @@
+{
+  "id": "agent-viz",
+  "name": "Agent Viz",
+  "version": "0.1.0",
+  "description": "可视化监控 OpenClaw Agent 工作过程的插件",
+  "main": "dist/index.js",
+  "kind": "extension",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "default": "ws://localhost:9000"
+      },
+      "contentCapture": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "activation": {
+    "onCapabilities": ["hook"]
+  },
+  "openclaw": {
+    "minVersion": "1.0.0"
+  }
+}
