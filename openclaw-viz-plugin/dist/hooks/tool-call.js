@@ -5,6 +5,7 @@
  * 记录工具调用的完整生命周期：工具名、参数、结果、耗时、错误等
  * 自动识别文件 I/O 操作（read/write/edit）和网络请求
  */
+import { resolveSessionId } from "./session-context.js";
 // 工具分类
 function classifyTool(toolName) {
     const name = toolName.toLowerCase();
@@ -51,7 +52,7 @@ export function registerToolCallHooks(api, transport) {
         transport.send({
             type: "before_tool_call",
             timestamp: Date.now(),
-            sessionId: e.runId ? undefined : undefined,
+            sessionId: resolveSessionId(undefined, undefined, e.runId),
             runId: e.runId,
             data: {
                 toolName: e.toolName,
@@ -79,6 +80,7 @@ export function registerToolCallHooks(api, transport) {
         transport.send({
             type: "after_tool_call",
             timestamp: Date.now(),
+            sessionId: resolveSessionId(undefined, undefined, e.runId),
             runId: e.runId,
             data: {
                 toolName: e.toolName,

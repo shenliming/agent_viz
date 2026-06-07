@@ -4,12 +4,20 @@
  * 拦截 model_call_started 和 model_call_ended 事件
  * 记录模型调用的完整生命周期：provider、model、耗时、usage、错误等
  */
+import { sessionKeyToId, runIdToSessionId } from "./session-context.js";
 export function registerModelCallHooks(api, transport) {
     const { logger } = api;
     // 模型调用开始
     api.on("model_call_started", (event) => {
         const e = event;
         logger.debug(`[agent-viz] model_call_started: ${e.provider}/${e.model}`);
+        // 建立 session 和 run 映射
+        if (e.sessionId) {
+            if (e.sessionKey)
+                sessionKeyToId.set(e.sessionKey, e.sessionId);
+            if (e.runId)
+                runIdToSessionId.set(e.runId, e.sessionId);
+        }
         transport.send({
             type: "model_call_started",
             timestamp: Date.now(),

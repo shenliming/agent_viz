@@ -130,18 +130,19 @@ npm run build
 
 #### monitors 配置说明
 
-| 开关 | 默认 | 控制内容 |
-|------|------|---------|
-| `llmCalls` | true | 模型调用生命周期事件 |
-| `llmContent` | true | LLM 输入/输出内容 |
-| `toolCalls` | true | 工具调用（参数/结果/耗时） |
-| `compaction` | true | 上下文压缩事件 |
-| `stateChanges` | true | Agent 状态变化推断 |
-| `sessionLifecycle` | true | 会话开始/结束 |
-| `messageReceived` | true | 用户消息接收 |
-| `messageSent` | true | Agent 消息发送 |
+| 开关                 | 默认   | 控制内容           |
+| ------------------ | ---- | -------------- |
+| `llmCalls`         | true | 模型调用生命周期事件     |
+| `llmContent`       | true | LLM 输入/输出内容    |
+| `toolCalls`        | true | 工具调用（参数/结果/耗时） |
+| `compaction`       | true | 上下文压缩事件        |
+| `stateChanges`     | true | Agent 状态变化推断   |
+| `sessionLifecycle` | true | 会话开始/结束        |
+| `messageReceived`  | true | 用户消息接收         |
+| `messageSent`      | true | Agent 消息发送     |
 
 关闭某项可减少事件量，提升性能。例如关闭工具调用：
+
 ```json
 { "monitors": { "toolCalls": false } }
 ```
@@ -165,7 +166,9 @@ PROXY_PORT=9002 LLM_TARGET=http://localhost:1234 npm start
 # => Proxy:     http://localhost:9002
 ```
 
-然后修改 OpenClaw 的 LLM API 端点为 `http://localhost:9002`，让所有 LLM 请求经过代理被捕获。
+然后修改 OpenClaw 的 LLM API 端点为 `http://localhost:9002/v1`，让所有 LLM 请求经过代理被捕获。
+
+> **重要**：大语言模型的 `baseUrl` 必须指向代理地址 `http://localhost:9002/v1`，否则代理无法拦截请求。如果直接指向原始 LLM 地址，请求将绕过代理，"真实 Context"视图将无数据。
 
 > 即使不启动代理，插件的 hooks 也能捕获大部分数据。代理的主要作用是拦截完整的 request body（含 tools 定义 JSON），展示在"真实 Context"视图中。
 
@@ -204,38 +207,38 @@ openclaw agent -m "请帮我读取 /etc/hostname 文件内容，然后计算 2+3
 
 ### viz-backend (9001)
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/events` | GET | 获取事件列表（`?limit=&offset=&type=&sessionId=`） |
-| `/api/sessions` | GET | 会话列表 |
-| `/api/sessions/:id/events` | GET | 指定会话的事件 |
-| `/api/sessions/:id/stats` | GET | 指定会话的统计 |
-| `/api/stats` | GET | 全局统计 |
-| `/api/sessions/:id` | DELETE | 删除指定会话 |
-| `/api/events` | DELETE | 清空所有数据 |
-| `/ws` | WebSocket | 实时事件推送 |
+| 端点                         | 方法        | 说明                                         |
+| -------------------------- | --------- | ------------------------------------------ |
+| `/api/events`              | GET       | 获取事件列表（`?limit=&offset=&type=&sessionId=`） |
+| `/api/sessions`            | GET       | 会话列表                                       |
+| `/api/sessions/:id/events` | GET       | 指定会话的事件                                    |
+| `/api/sessions/:id/stats`  | GET       | 指定会话的统计                                    |
+| `/api/stats`               | GET       | 全局统计                                       |
+| `/api/sessions/:id`        | DELETE    | 删除指定会话                                     |
+| `/api/events`              | DELETE    | 清空所有数据                                     |
+| `/ws`                      | WebSocket | 实时事件推送                                     |
 
 ### viz-proxy (9002)
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/requests` | GET | LLM 请求记录（`?limit=&offset=`） |
-| `/api/stats` | GET | 统计（总请求数、token、模型分布） |
-| `/api/requests` | DELETE | 清空所有数据 |
-| `/ws` | WebSocket | 实时请求推送 |
+| 端点              | 方法        | 说明                          |
+| --------------- | --------- | --------------------------- |
+| `/api/requests` | GET       | LLM 请求记录（`?limit=&offset=`） |
+| `/api/stats`    | GET       | 统计（总请求数、token、模型分布）         |
+| `/api/requests` | DELETE    | 清空所有数据                      |
+| `/ws`           | WebSocket | 实时请求推送                      |
 
 ## 监控内容一览
 
-| 类别 | 事件类型 | 说明 |
-|------|---------|------|
-| **Context Window** | `llm_input`, `llm_output` | system prompt、history messages、assistant 回复、token 使用 |
-| **工具调用** | `before_tool_call`, `after_tool_call` | 工具名、参数、结果、耗时、文件路径 |
-| **状态变化** | `agent_state_change` | idle / thinking / executing / compacting / terminated |
-| **模型调用** | `model_call_started`, `model_call_ended` | provider、model、耗时、错误 |
-| **上下文压缩** | `before_compaction`, `after_compaction` | 压缩前后对比 |
-| **会话** | `session_start`, `session_end` | 会话生命周期 |
-| **消息** | `message_received`, `message_sent` | 用户输入 & Agent 输出 |
-| **代理** | `llm_proxy_request` | 完整 LLM request/response body |
+| 类别                 | 事件类型                                     | 说明                                                    |
+| ------------------ | ---------------------------------------- | ----------------------------------------------------- |
+| **Context Window** | `llm_input`, `llm_output`                | system prompt、history messages、assistant 回复、token 使用  |
+| **工具调用**           | `before_tool_call`, `after_tool_call`    | 工具名、参数、结果、耗时、文件路径                                     |
+| **状态变化**           | `agent_state_change`                     | idle / thinking / executing / compacting / terminated |
+| **模型调用**           | `model_call_started`, `model_call_ended` | provider、model、耗时、错误                                  |
+| **上下文压缩**          | `before_compaction`, `after_compaction`  | 压缩前后对比                                                |
+| **会话**             | `session_start`, `session_end`           | 会话生命周期                                                |
+| **消息**             | `message_received`, `message_sent`       | 用户输入 & Agent 输出                                       |
+| **代理**             | `llm_proxy_request`                      | 完整 LLM request/response body                          |
 
 ## 常用命令
 
@@ -259,9 +262,10 @@ lsof -i :9002
 
 ## 服务端口总览
 
-| 端口 | 服务 | 用途 |
-|------|------|------|
-| 3000 | viz-frontend | 前端可视化界面 |
-| 9000 | test-server | 开发测试（已废弃） |
-| 9001 | viz-backend | 事件存储、API 和 WebSocket |
-| 9002 | viz-proxy | LLM 请求代理拦截 |
+| 端口   | 服务           | 用途                   |
+| ---- | ------------ | -------------------- |
+| 3000 | viz-frontend | 前端可视化界面              |
+| 9000 | test-server  | 开发测试（已废弃）            |
+| 9001 | viz-backend  | 事件存储、API 和 WebSocket |
+| 9002 | viz-proxy    | LLM 请求代理拦截           |
+

@@ -1,6 +1,6 @@
 # Agent 可视化监控系统 - 需求文档
 
-> 最后更新：2026-06-06
+> 最后更新：2026-06-07
 
 ## 项目概述
 开发一个可视化监控工具，用于监控 Agent 系统的运行状态，实现 Agent 行为的全面可视化，类似对 Agent 进行"CT 扫描"。
@@ -32,8 +32,10 @@
 │   统一事件接收 | 存储(SQLite) | 广播 | API        │
 │   Express + WebSocket + better-sqlite3            │
 └────────┬───────────────────┬─────────────────────┘
+         │                   ▲
+         │                   │ WS 事件推送
          │                   │
-    ┌────▼─────┐        ┌────▼──────────┐
+    ┌────▼─────┐        ┌────┴──────────┐
     │viz-proxy │        │ 框架插件适配器  │
     │ (9002)   │        │                │
     │          │        │ OpenClaw Plugin │
@@ -89,7 +91,7 @@ OpenClaw → viz-proxy (9002) → LLM API
 - [x] 工具分类（file_read/write/edit, exec, network, search, memory）
 
 ### 4. 状态变化
-- [x] Agent 当前状态（idle / thinking / executing / compacting / terminated）— 插件推断
+- [x] Agent 当前状态（idle / thinking / executing / waiting / compacting / terminated）— 插件推断
 - [x] 会话状态变化
 - [ ] 独立错误/异常事件（高亮展示）
 
@@ -139,10 +141,44 @@ OpenClaw Gateway
 | **LLM 输出** | `llm_output` | 插件 | assistant 回复、thinking、usage |
 | **模型调用** | `model_call_started/ended` | 插件 | provider、model、耗时、错误 |
 | **工具调用** | `before_tool_call/after_tool_call` | 插件 | 工具名、参数、结果、耗时、分类 |
-| **状态变化** | `agent_state_change` | 插件 | idle/thinking/executing/compacting/terminated |
+| **网络搜索** | `web_search` | 代理/插件 | 搜索查询、结果摘要 |
+| **状态变化** | `agent_state_change` | 插件 | idle/thinking/executing/waiting/compacting/terminated |
 | **上下文压缩** | `before_compaction/after_compaction` | 插件 | 压缩前后对比 |
 | **会话** | `session_start/end` | 插件 | 会话生命周期 |
 | **消息** | `message_received/sent` | 插件 | 用户输入 & Agent 输出 |
+| **错误** | `error` | 插件 | Agent 内部抛出的异常 |
+
+### 统一事件 Schema 规范
+
+所有事件遵循统一的顶层结构，确保前后端兼容性和可扩展性：
+
+```typescript
+interface VizEvent {
+  // 事件类型，对应上表
+  type: string;
+
+  // 时间戳（毫秒，客户端生成）
+  timestamp: number;
+
+  // 会话唯一标识（viz-backend 分配或解析后的统一 ID）
+  sessionId: string;
+
+  // 会话业务键（部分 hook 仅有此字段，需通过 session-context 映射）
+  sessionKey?: string;
+
+  // 工具调用/模型调用的运行 ID
+  runId?: string;
+
+  // 事件业务数据，结构由具体 type 决定
+  data: Record<string, unknown>;
+}
+```
+
+**Schema 约束与规范**：
+1. `sessionId` 为必填字段，若原始事件只有 `sessionKey` 或 `runId`，必须通过 `session-context.ts` 解析映射后再发送
+2. `timestamp` 优先使用客户端事件触发时刻，若缺失则后端补充接收时刻
+3. `data` 字段内避免嵌套过深（不超过 3 层），大体积字段（如完整 response body）可启用采样策略
+4. 新增事件类型必须先在 viz-backend 的 SQLite schema 和前端事件路由中注册，禁止随意扩展未约定字段
 
 ### 跨框架适配器设计
 
@@ -241,24 +277,44 @@ other       ← 默认
 | 时间线 | 按时间排列所有事件 | 插件事件 |
 | Context Window | LLM 调用上下文（token 进度/消息列表/thinking） | 插件 llm_input/output |
 | 真实 Context | LLM 实际 request body（完整 messages+tools JSON） | 代理 llm_proxy_request |
-| 工具调用图 | ReactFlow 流程图（6 色分类） | 插件 tool_call 事件 |
+| 工具调用图 | ReactFlow 流程图（7 色分类） | 插件 tool_call 事件 |
 | 状态面板 | 会话列表 + 最近事件 | 插件 session/state 事件 |
 
 ### 待实现
 
-- [ ] 事件过滤和搜索（按类型/时间/会话）
-- [ ] Token 使用统计图表
-- [ ] 历史回放功能（逐步重放事件）
-- [ ] 独立错误事件高亮展示
-- [ ] 深色/浅色主题切换
+- [ ] 独立错误事件高亮展示（P0）
+- [ ] 事件过滤和搜索（按类型/时间/会话）（P1）
+- [ ] Token 使用统计图表（P1）
+- [ ] 历史回放功能（逐步重放事件）（P2）
+- [ ] 多 Session 对比视图（P2）
+- [ ] Prompt 变更追踪与 diff 高亮（P2）
+- [ ] ReAct 循环可视化（P3）
+- [ ] 数据导出/分享（JSON / Markdown 报告）（P3）
+- [ ] Hook vs Proxy 数据对比视图（P3）
+- [ ] 深色/浅色主题切换（P3）
 
 ---
 
-## 待规划
+## 待规划（按优先级排序）
 
-1. 网络请求详情（URL/方法/状态码）— 从 web_fetch 等工具参数中提取
-2. 自我修正/反思记录 — 分析连续 assistant 消息流
-3. 内容采样策略（full/truncated/hash）和隐私脱敏
-4. LangChain/其他框架适配器
-5. 性能优化（批量发送、大内容压缩）
-6. Hook vs Proxy 数据对比视图（研究 prompt 组装差异）
+### P0 - 核心功能补齐
+1. **独立错误/异常事件高亮展示** — 前端新增 error 类型事件过滤和红色高亮，后端接收 `error` 事件持久化
+2. **网络请求详情（URL/方法/状态码）** — 从 web_fetch 等工具参数中提取，并在前端工具调用面板展示
+3. **Token 使用统计图表** — session 级 token 消耗趋势折线图（基于 `model_call_started/ended` + `llm_output` 的 usage 数据）
+
+### P1 - 增强分析能力
+4. **自我修正/反思记录** — 分析连续 assistant 消息流，检测 "reflection" / "correction" / "I was wrong" 等模式
+5. **多 Session 对比视图** — 支持同时打开 2-4 个 session 的时间线并排对比，用于 A/B 测试 prompt 效果
+6. **Prompt 变更追踪** — 检测同一 session 中 system prompt 或 tool schema 的变更，高亮 diff
+
+### P2 - 工程与扩展
+7. **内容采样策略和隐私脱敏** — 支持 full / truncated / hash-only 三档采样，支持正则脱敏敏感字段
+8. **性能优化（批量发送、大内容压缩）** — WebSocket 批量 flush、大 content gzip 压缩、后端写入缓冲队列
+9. **容错降级设计** — viz-backend 离线时插件本地环形缓冲 + 重连补发；viz-proxy 拦截失败时直通不阻断 LLM 调用
+10. **LangChain/其他框架适配器** — 基于统一事件 Schema 和适配器模板，实现 LangChain callback handler
+
+### P3 - 高级功能
+11. **ReAct 循环可视化** — 将 thinking → tool_call → observation → thinking 的循环渲染为 ReactFlow 子图
+12. **历史回放功能（逐步重放事件）** — 时间线拖拽进度条、倍速播放、单步前进/后退
+13. **数据导出/分享** — session 数据导出为 JSON / Markdown 报告，生成可分享链接（含数据脱敏选项）
+14. **Hook vs Proxy 数据对比视图** — 并排展示插件采集的 messages 和代理拦截的实际 request body，高亮差异（用于研究 prompt 组装差异）

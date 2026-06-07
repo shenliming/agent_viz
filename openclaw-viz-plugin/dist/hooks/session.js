@@ -4,12 +4,17 @@
  * 拦截 session_start 和 session_end 事件
  * 记录会话的开始、结束、持续时间、消息数、结束原因等
  */
+import { sessionKeyToId } from "./session-context.js";
 export function registerSessionHooks(api, transport) {
     const { logger } = api;
     // 会话开始
     api.on("session_start", (event) => {
         const e = event;
         logger.info(`[agent-viz] session_start: ${e.sessionId}`);
+        // 建立 sessionKey → sessionId 映射
+        if (e.sessionId && e.sessionKey) {
+            sessionKeyToId.set(e.sessionKey, e.sessionId);
+        }
         transport.send({
             type: "session_start",
             timestamp: Date.now(),

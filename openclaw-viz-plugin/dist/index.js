@@ -23,6 +23,9 @@ export function register(api) {
     const pluginConfig = pluginEntry?.config ?? {};
     const endpoint = pluginConfig.endpoint ?? "ws://localhost:9001/ws";
     const contentCapture = pluginConfig.contentCapture ?? true;
+    const monitors = pluginConfig.monitors ?? {};
+    // 监控项开关（默认全部启用）
+    const isEnabled = (key) => monitors[key] !== false;
     logger.info(`[agent-viz] 初始化可视化插件，端点: ${endpoint}`);
     // 初始化传输层
     const transport = initTransport({
@@ -30,14 +33,28 @@ export function register(api) {
         contentCapture,
         logger,
     });
-    // 注册所有 hooks
-    registerModelCallHooks(api, transport);
-    registerToolCallHooks(api, transport);
-    registerCompactionHooks(api, transport);
-    registerSessionHooks(api, transport);
-    registerMessageHooks(api, transport);
-    registerLlmContentHooks(api, transport);
-    registerStateMonitorHooks(api, transport);
+    // 注册所有 hooks（根据 monitors 配置开关）
+    if (isEnabled("llmCalls")) {
+        registerModelCallHooks(api, transport);
+    }
+    if (isEnabled("toolCalls")) {
+        registerToolCallHooks(api, transport);
+    }
+    if (isEnabled("compaction")) {
+        registerCompactionHooks(api, transport);
+    }
+    if (isEnabled("sessionLifecycle")) {
+        registerSessionHooks(api, transport);
+    }
+    if (isEnabled("messageReceived") || isEnabled("messageSent")) {
+        registerMessageHooks(api, transport);
+    }
+    if (isEnabled("llmContent")) {
+        registerLlmContentHooks(api, transport);
+    }
+    if (isEnabled("stateChanges")) {
+        registerStateMonitorHooks(api, transport);
+    }
     logger.info("[agent-viz] 所有监控 hooks 已注册完成");
 }
 //# sourceMappingURL=index.js.map

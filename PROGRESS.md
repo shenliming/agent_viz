@@ -1,6 +1,6 @@
 # Agent 可视化监控系统 - 项目进度
 
-> 最后更新：2026-06-06
+> 最后更新：2026-06-07
 
 ---
 
@@ -27,42 +27,64 @@
 
 ---
 
-## 下一步计划
+## 下一步计划（对齐 requirements.md 优先级）
 
-### 高优先级
+### P0 - 核心功能补齐
 
-1. **前端增强**
-   - [ ] 事件过滤和搜索（按类型/时间/会话）
-   - [ ] Token 使用统计图表
-   - [ ] 历史回放功能
+1. **独立错误/异常事件高亮展示**
+   - [ ] 后端接收 `error` 事件并持久化
+   - [ ] 前端新增 error 类型事件过滤和红色高亮
 
-2. **完善 I/O 监控**
-   - [ ] 网络请求详情（URL、方法、状态码）
-   - [ ] 数据库操作监控
+2. **网络请求详情（URL/方法/状态码）**
+   - [ ] 从 web_fetch 等工具参数中提取
+   - [ ] 前端工具调用面板展示
 
-### 中优先级
+3. **Token 使用统计图表**
+   - [ ] session 级 token 消耗趋势折线图
 
-3. **完善决策过程**
-   - [ ] 自我修正/反思记录
-   - [ ] 多步推理中间结果提取
+### P1 - 增强分析能力
 
-4. **前端细节**
-   - [ ] 独立错误事件高亮展示
-   - [ ] 深色/浅色主题切换
+4. **自我修正/反思记录**
+   - [ ] 分析连续 assistant 消息流，检测 "reflection" / "correction" 等模式
 
-### 低优先级
+5. **多 Session 对比视图**
+   - [ ] 支持同时打开 2-4 个 session 的时间线并排对比
 
-5. **配置优化**
-   - [ ] 内容采样策略（full/truncated/hash）
-   - [ ] 隐私保护（敏感数据脱敏）
+6. **Prompt 变更追踪**
+   - [ ] 检测同一 session 中 system prompt 或 tool schema 的变更，高亮 diff
 
-6. **性能优化**
-   - [ ] 事件批量发送
-   - [ ] 大内容压缩
+### P2 - 工程与扩展
 
-7. **多框架支持**
-   - [ ] LangChain Adapter
-   - [ ] Hook vs Proxy 数据对比视图
+7. **内容采样策略和隐私脱敏**
+   - [ ] 支持 full / truncated / hash-only 三档采样
+   - [ ] 正则脱敏敏感字段
+
+8. **性能优化（批量发送、大内容压缩）**
+   - [ ] WebSocket 批量 flush
+   - [ ] 大 content gzip 压缩
+   - [ ] 后端写入缓冲队列
+
+9. **容错降级设计**
+   - [ ] viz-backend 离线时插件本地环形缓冲 + 重连补发
+   - [ ] viz-proxy 拦截失败时直通不阻断 LLM 调用
+
+10. **LangChain/其他框架适配器**
+    - [ ] 基于统一事件 Schema 和适配器模板实现
+
+### P3 - 高级功能
+
+11. **ReAct 循环可视化**
+    - [ ] 将 thinking → tool_call → observation → thinking 的循环渲染为 ReactFlow 子图
+
+12. **历史回放功能（逐步重放事件）**
+    - [ ] 时间线拖拽进度条、倍速播放、单步前进/后退
+
+13. **数据导出/分享**
+    - [ ] session 数据导出为 JSON / Markdown 报告
+    - [ ] 生成可分享链接（含数据脱敏选项）
+
+14. **Hook vs Proxy 数据对比视图**
+    - [ ] 并排展示插件采集的 messages 和代理拦截的实际 request body
 
 ---
 
@@ -131,14 +153,14 @@ OpenClaw → viz-proxy (9002) → LLM API
 | 参数 | ✅ | `params` 字段 |
 | 返回值 | ✅ | `result` 字段（含截断处理） |
 | 调用耗时 | ✅ | `durationMs` 字段 |
-| 工具调用链 | ✅ | `runId` 关联 + ReactFlow 流程图（6 色分类） |
+| 工具调用链 | ✅ | `runId` 关联 + ReactFlow 流程图（7 色分类） |
 | Session 关联 | ✅ | 通过 `session-context.ts` 的 runId→sessionId 映射 |
 
 ### 4. 状态变化 ✅ 80%
 
 | 需求 | 状态 | 实现 |
 |------|------|------|
-| Agent 当前状态 | ✅ | `agent_state_change`（idle/thinking/executing/compacting/terminated） |
+| Agent 当前状态 | ✅ | `agent_state_change`（idle/thinking/executing/waiting/compacting/terminated） |
 | 会话状态变化 | ✅ | `session_start` / `session_end` |
 | 错误/异常事件 | ⚠️ | 有 `errorCategory`/`failureKind`，缺少前端高亮 |
 
@@ -236,10 +258,22 @@ openclaw-viz-plugin/src/hooks/
 | 时间线 | `TimelineView` | 按时间排列所有事件 | 插件事件 |
 | Context Window | `ContextWindowView` | Token 进度条 + 消息列表 + thinking 高亮 | 插件 llm |
 | 真实 Context | `ProxyContextWindowView` | 完整 messages + tools JSON + 请求参数 | 代理 |
-| 工具调用图 | `FlowChartView` | ReactFlow 流程图（6 色分类） | 插件 tool |
+| 工具调用图 | `FlowChartView` | ReactFlow 流程图（7 色分类） | 插件 tool |
 | 状态面板 | `StatusPanel` | 会话列表 + 最近事件 | 插件 session/state |
 
 **其他已实现**：连接状态指示器、历史事件加载（REST API）、事件去重、清空历史、监控开关配置
+
+**待实现**（对齐 requirements.md）：
+- [ ] 独立错误事件高亮展示（P0）
+- [ ] 事件过滤和搜索（按类型/时间/会话）（P1）
+- [ ] Token 使用统计图表（P1）
+- [ ] 历史回放功能（逐步重放事件）（P2）
+- [ ] 多 Session 对比视图（P2）
+- [ ] Prompt 变更追踪与 diff 高亮（P2）
+- [ ] ReAct 循环可视化（P3）
+- [ ] 数据导出/分享（JSON / Markdown 报告）（P3）
+- [ ] Hook vs Proxy 数据对比视图（P3）
+- [ ] 深色/浅色主题切换（P3）
 
 ---
 
