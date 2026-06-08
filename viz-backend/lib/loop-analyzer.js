@@ -100,6 +100,85 @@ export function getLoopStats(loops) {
 // ========== 内部辅助函数 ==========
 
 /**
+ * 解析 SSE 流式响应，合并为一个完整的 response 对象
+ * 从流式 chunks 中提取 tool_calls 和 content
+ */
+function parseStreamingResponse(rawText) {
+  if (!rawText) return null;
+
+  const lines = rawText.split('\n');
+  const merged = {
+    id: '',
+    model: '',
+    choices: [],
+    usage: null,
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+    const dataStr = trimmed.slice(6);
+    if (dataStr === '[DONE]') continue;
+
+    try {
+      const chunk = JSON.parse(dataStr);
+
+      if (chunk.id) merged.id = chunk.id;
+      if (chunk.model) merged.model = chunk.model;
+      if (chunk.usage) merged.usage = chunk.usage;
+
+      if (Array.isArray(chunk.choices)) {
+        for (const choice of chunk.choices) {
+          const idx = choice.index || 0;
+          if (!merged.choices[idx]) {
+            merged.choices[idx] = {
+              index: idx,
+              message: { role: 'assistant', content: '', tool_calls: [] },
+            };
+          }
+
+          const delta = choice.delta;
+          if (!delta) continue;
+
+          // 合并 content
+          if (delta.content) {
+            merged.choices[idx].message.content += delta.content;
+          }
+
+          // 合并 tool_calls（流式可能分段）
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const tcIdx = tc.index ?? 0;
+              if (!merged.choices[idx].message.tool_calls[tcIdx]) {
+                merged.choices[idx].message.tool_calls[tcIdx] = {
+                  id: tc.id || '',
+                  type: tc.type || 'function',
+                  function: { name: '', arguments: '' },
+                };
+              }
+              const existing = merged.choices[idx].message.tool_calls[tcIdx];
+              if (tc.id) existing.id = tc.id;
+              if (tc.function?.name) existing.function.name += tc.function.name;
+              if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+            }
+          }
+
+          // 非流式的 finish_reason 标记
+          if (choice.finish_reason) {
+            merged.choices[idx].finish_reason = choice.finish_reason;
+          }
+        }
+      }
+    } catch {
+      // 跳过无法解析的行
+    }
+  }
+
+  return merged.choices.length > 0 ? merged : null;
+}
+
+/**
  * 从单个 LLM 调用构建循环对象
  */
 function buildLoop(call, index, allCalls) {
@@ -121,11 +200,7 @@ function buildLoop(call, index, allCalls) {
     
     // 处理 viz-proxy 存储的 { raw: "..." } 格式
     if (response && response.raw) {
-      try {
-        response = JSON.parse(response.raw);
-      } catch {
-        response = null;
-      }
+      response = parseStreamingResponse(response.raw);
     }
   } catch {
     response = null;
