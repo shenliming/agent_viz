@@ -5,9 +5,10 @@ import { FlowChartView } from './FlowChartView';
 import { StatusPanel } from './StatusPanel';
 import { ContextWindowView } from './ContextWindowView';
 import { ProxyContextWindowView } from './ProxyContextWindowView';
+import { LoopView } from './LoopView';
 import { formatTimestamp, getEventLabel } from '../utils/format';
 
-type TabType = 'timeline' | 'flowchart' | 'status' | 'context' | 'proxy-context';
+type TabType = 'timeline' | 'context' | 'proxy-context' | 'loops' | 'flowchart' | 'status';
 
 export function Dashboard({ events, onClear }: { events: VizEvent[]; onClear?: () => void }) {
   const [activeTab, setActiveTab] = useState<TabType>('timeline');
@@ -102,6 +103,7 @@ export function Dashboard({ events, onClear }: { events: VizEvent[]; onClear?: (
     { key: 'timeline', label: '时间线' },
     { key: 'context', label: 'Context Window' },
     { key: 'proxy-context', label: '真实 Context' },
+    { key: 'loops', label: '循环分析' },
     { key: 'flowchart', label: '工具调用图' },
     { key: 'status', label: '状态面板' },
   ];
@@ -189,6 +191,9 @@ export function Dashboard({ events, onClear }: { events: VizEvent[]; onClear?: (
           )}
           {activeTab === 'proxy-context' && (
             <ProxyContextWindowView />
+          )}
+          {activeTab === 'loops' && (
+            <LoopView />
           )}
           {activeTab === 'flowchart' && (
             <FlowChartView nodes={toolCallNodes} edges={toolCallEdges} />

@@ -98,6 +98,22 @@ const insertBatch = db.transaction((events) => {
 
 console.log('[viz-backend] ✓ 数据库初始化完成:', DB_PATH);
 
+// ─── Proxy 数据库连接（用于循环分析） ───
+
+const PROXY_DB_PATH = process.env.PROXY_DB_PATH || join(__dirname, '..', 'viz-proxy', 'data', 'proxy.db');
+
+let proxyDb = null;
+try {
+  if (fs.existsSync(PROXY_DB_PATH)) {
+    proxyDb = new Database(PROXY_DB_PATH, { readonly: true });
+    console.log('[viz-backend] ✓ Proxy 数据库连接完成:', PROXY_DB_PATH, '(只读)');
+  } else {
+    console.log('[viz-backend] ⚠ Proxy 数据库不存在，循环分析功能将不可用:', PROXY_DB_PATH);
+  }
+} catch (err) {
+  console.log('[viz-backend] ⚠ Proxy 数据库连接失败:', err.message);
+}
+
 // ─── REST API ───
 
 const app = express();
@@ -229,6 +245,16 @@ app.delete('/api/events', (req, res) => {
   
   res.json({ success: true });
 });
+
+// ─── 循环分析 API（需要 proxyDb） ───
+
+if (proxyDb) {
+  const { createLoopsRouter } = await import('./routes/loops.js');
+  app.use('/api/loops', createLoopsRouter(proxyDb));
+  console.log('[viz-backend] ✓ 循环分析 API 已启用');
+} else {
+  console.log('[viz-backend] ⚠ 循环分析 API 未启用（proxyDb 不可用）');
+}
 
 const httpServer = app.listen(HTTP_PORT, () => {
   console.log(`[viz-backend] ✓ REST API 启动在 http://localhost:${HTTP_PORT}`);
