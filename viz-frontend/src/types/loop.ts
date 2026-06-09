@@ -2,7 +2,7 @@ export interface LoopToolCall {
   id: string;
   name: string;
   arguments: string;
-  status?: 'success' | 'error';
+  status?: 'success' | 'error' | string;
   result?: string;
   durationMs?: number;
 }
@@ -11,6 +11,13 @@ export interface LoopObservation {
   toolCallId: string;
   toolName: string;
   content: string | null;
+}
+
+export interface LoopStateChange {
+  from: string;
+  to: string;
+  reason?: string;
+  timestamp: number;
 }
 
 export interface LoopTokenUsage {
@@ -39,6 +46,7 @@ export interface Loop {
   observations: LoopObservation[];
   tokenUsage: LoopTokenUsage;
   inferred: LoopInferred;
+  stateChanges?: LoopStateChange[];
 }
 
 export interface LoopStats {

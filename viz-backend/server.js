@@ -243,6 +243,16 @@ app.delete('/api/events', (req, res) => {
     db.prepare('DELETE FROM sessions').run();
   })();
   
+  if (proxyDb) {
+    try {
+      const writableProxyDb = new Database(PROXY_DB_PATH);
+      writableProxyDb.prepare('DELETE FROM llm_requests').run();
+      writableProxyDb.close();
+    } catch (e) {
+      console.warn('[proxy] 清空 llm_requests 失败:', e.message);
+    }
+  }
+  
   res.json({ success: true });
 });
 
@@ -250,7 +260,7 @@ app.delete('/api/events', (req, res) => {
 
 if (proxyDb) {
   const { createLoopsRouter } = await import('./routes/loops.js');
-  app.use('/api/loops', createLoopsRouter(proxyDb));
+  app.use('/api/loops', createLoopsRouter(proxyDb, db));
   console.log('[viz-backend] ✓ 循环分析 API 已启用');
 } else {
   console.log('[viz-backend] ⚠ 循环分析 API 未启用（proxyDb 不可用）');

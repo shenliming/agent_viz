@@ -235,52 +235,100 @@ function RequestDetail({ request }: { request: ProxyRequest }) {
       <div style={styles.section}>
         <h3 style={styles.sectionTitle}>Messages ({messages.length})</h3>
         <div style={styles.messages}>
-          {messages.map((msg, i) => {
-            let content: string;
-            if (typeof msg.content === 'string') {
-              content = msg.content;
-            } else if (Array.isArray(msg.content)) {
-               content = msg.content
-                 .filter(c => c != null)
-                 .map(c => (c as any)?.text || JSON.stringify(c))
-                 .join('\n');
-            } else if (msg.content == null) {
-              content = '(empty)';
-            } else {
-              content = JSON.stringify(msg.content);
+          {(() => {
+            // 构建 tool_call_id → tool_name 映射
+            const toolCallIdToName: Record<string, string> = {};
+            for (const msg of messages) {
+              const toolCalls = (msg as any).tool_calls;
+              if (Array.isArray(toolCalls)) {
+                for (const tc of toolCalls) {
+                  const id = tc.id;
+                  const name = tc.function?.name;
+                  if (id && name) {
+                    toolCallIdToName[id] = name;
+                  }
+                }
+              }
             }
-            
-            const charCount = content.length;
-            const isExpanded = expandedMsg === i;
-            const isLong = content.length > 500;
-            const displayContent = isLong && !isExpanded ? content.slice(0, 500) + '...' : content;
 
-            return (
-              <div key={i} style={styles.message}>
-                <div style={styles.messageHeader}>
-                  <span style={{
-                    ...styles.messageRole,
-                    backgroundColor: msg.role === 'system' ? '#8b5cf6' 
-                      : msg.role === 'user' ? '#3b82f6' 
-                      : '#22c55e',
-                  }}>
-                    {msg.role}
-                  </span>
-                  <span style={styles.messageIndex}>[{i}]</span>
-                  <span style={styles.charCount}>{charCount} 字符</span>
-                  {isLong && (
-                    <button 
-                      style={styles.expandBtn}
-                      onClick={() => setExpandedMsg(isExpanded ? null : i)}
-                    >
-                      {isExpanded ? '收起' : '展开'}
-                    </button>
-                  )}
+            return messages.map((msg, i) => {
+              // 检查是否有 tool_calls（assistant 消息）
+              const toolCalls = (msg as any).tool_calls;
+              const hasToolCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
+              
+              // 检查是否是 tool 角色的消息，通过 tool_call_id 匹配工具名称
+              const isToolMessage = msg.role === 'tool';
+              const toolCallId = (msg as any).tool_call_id;
+              const toolName = isToolMessage 
+                ? (msg as any).name || toolCallIdToName[toolCallId] || 'unknown' 
+                : null;
+
+              let content: string;
+              if (typeof msg.content === 'string') {
+                content = msg.content;
+              } else if (Array.isArray(msg.content)) {
+                 content = msg.content
+                   .filter(c => c != null)
+                   .map(c => (c as any)?.text || JSON.stringify(c))
+                   .join('\n');
+              } else if (msg.content == null) {
+                content = '(empty)';
+              } else {
+                content = JSON.stringify(msg.content);
+              }
+              
+              const charCount = content.length;
+              const isExpanded = expandedMsg === i;
+              const isLong = content.length > 500;
+              const displayContent = isLong && !isExpanded ? content.slice(0, 500) + '...' : content;
+
+              return (
+                <div key={i} style={styles.message}>
+                  <div style={styles.messageHeader}>
+                    <span style={{
+                      ...styles.messageRole,
+                      backgroundColor: msg.role === 'system' ? '#8b5cf6' 
+                        : msg.role === 'user' ? '#3b82f6' 
+                        : msg.role === 'tool' ? '#f59e0b'
+                        : '#22c55e',
+                    }}>
+                      {msg.role}
+                    </span>
+                    <span style={styles.messageIndex}>[{i}]</span>
+                    {/* 工具调用标签 - 显示在 tool 角色消息上 */}
+                    {isToolMessage && toolName && (
+                      <span style={styles.toolCallTag}>
+                        🔧 {toolName}
+                      </span>
+                    )}
+                    {/* assistant 消息的工具调用标签 */}
+                    {hasToolCalls && (
+                      <div style={styles.toolCallsBadge}>
+                        {toolCalls.map((tc: any, ti: number) => {
+                          const tcName = tc.function?.name || `tool-${ti}`;
+                          return (
+                            <span key={tc.id || ti} style={styles.toolCallTag}>
+                               {tcName}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <span style={styles.charCount}>{charCount} 字符</span>
+                    {isLong && (
+                      <button 
+                        style={styles.expandBtn}
+                        onClick={() => setExpandedMsg(isExpanded ? null : i)}
+                      >
+                        {isExpanded ? '收起' : '展开'}
+                      </button>
+                    )}
+                  </div>
+                  <pre style={styles.messageContent}>{displayContent}</pre>
                 </div>
-                <pre style={styles.messageContent}>{displayContent}</pre>
-              </div>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -553,6 +601,24 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#334155',
     padding: '2px 6px',
     borderRadius: '4px',
+  },
+  toolCallsBadge: {
+    display: 'flex',
+    gap: '6px',
+    flexWrap: 'wrap',
+  },
+  toolCallTag: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontSize: '12px',
+    fontWeight: 600,
+    color: '#93c5fd',
+    backgroundColor: '#1e3a5f',
+    border: '1px solid #3b82f6',
+    borderRadius: '6px',
+    padding: '2px 8px',
+    fontFamily: 'monospace',
   },
   expandBtn: {
     marginLeft: 'auto',

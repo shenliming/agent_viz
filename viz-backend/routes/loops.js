@@ -12,10 +12,80 @@ import { extractTokenTrend, getTokenSummary, getTokenByModel } from '../lib/toke
  * 创建循环分析路由
  * 
  * @param {Database} proxyDb - viz-proxy 的 SQLite 数据库实例
+ * @param {Database} [eventsDb] - viz-backend 的 events 数据库实例（可选，用于融合 plugin 层数据）
  * @returns {Router} Express Router
  */
-export function createLoopsRouter(proxyDb) {
+export function createLoopsRouter(proxyDb, eventsDb = null) {
   const router = Router();
+
+  /**
+   * 从 events.db 获取工具调用事件，按时间范围匹配到循环中
+   */
+  function enrichLoopsWithPluginEvents(loops) {
+    if (!eventsDb || loops.length === 0) return loops;
+
+    try {
+      // 获取所有 before_tool_call 和 after_tool_call 事件
+      const events = eventsDb.prepare(`
+        SELECT type, timestamp, data
+        FROM events
+        WHERE type IN ('before_tool_call', 'after_tool_call')
+        ORDER BY timestamp ASC
+      `).all();
+
+      if (events.length === 0) return loops;
+
+      // 解析事件数据
+      const parsedEvents = events.map(e => ({
+        type: e.type,
+        timestamp: e.timestamp,
+        data: JSON.parse(e.data),
+      }));
+
+      // 将事件匹配到对应的循环中
+      for (const loop of loops) {
+        const loopStart = loop.startTime;
+        const loopEnd = loop.endTime;
+
+        // 找到在这个循环时间范围内的事件
+        const matchedEvents = parsedEvents.filter(e =>
+          e.timestamp >= loopStart && e.timestamp <= loopEnd
+        );
+
+        if (matchedEvents.length > 0) {
+          // 合并 tool call 结果
+          const afterToolCalls = matchedEvents.filter(e => e.type === 'after_tool_call');
+          if (afterToolCalls.length > 0 && loop.toolCalls) {
+            for (const tc of loop.toolCalls) {
+              const matchingResult = afterToolCalls.find(e =>
+                e.data.toolName === tc.name
+              );
+              if (matchingResult) {
+                tc.result = matchingResult.data.result;
+                tc.status = matchingResult.data.status;
+                tc.durationMs = matchingResult.data.durationMs;
+              }
+            }
+          }
+
+          // 添加状态变化信息
+          const stateChanges = matchedEvents.filter(e => e.type === 'agent_state_change');
+          if (stateChanges.length > 0) {
+            loop.stateChanges = stateChanges.map(e => ({
+              from: e.data.from,
+              to: e.data.to,
+              reason: e.data.reason,
+              timestamp: e.timestamp,
+            }));
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[loops-api] 融合 plugin 事件失败:', err.message);
+    }
+
+    return loops;
+  }
 
   /**
    * GET /api/loops/stats
@@ -75,7 +145,8 @@ export function createLoopsRouter(proxyDb) {
         LIMIT ? OFFSET ?
       `).all(limit, offset);
 
-      const loops = analyzeLoops(rows);
+      let loops = analyzeLoops(rows);
+      loops = enrichLoopsWithPluginEvents(loops);
       res.json(loops);
     } catch (err) {
       console.error('[loops-api] Error getting loops:', err.message);
@@ -98,11 +169,13 @@ export function createLoopsRouter(proxyDb) {
         SELECT * FROM llm_requests ORDER BY timestamp ASC
       `).all();
 
-      const detail = getLoopDetail(rows, loopIndex);
+      let detail = getLoopDetail(rows, loopIndex);
       if (!detail) {
         return res.status(404).json({ error: 'Loop not found' });
       }
 
+      // 融合 plugin 层事件
+      detail = enrichLoopsWithPluginEvents([detail])[0];
       res.json(detail);
     } catch (err) {
       console.error('[loops-api] Error getting loop detail:', err.message);
